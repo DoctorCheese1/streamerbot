@@ -116,15 +116,26 @@ client.on('messageCreate', async (message) => {
     }
 
     const platform = (args[0] || '').toLowerCase();
-    const handle = args[1];
-    const displayName = args.slice(2).join(' ') || handle;
-    if (!['twitch', 'youtube', 'kick', 'facebook'].includes(platform) || !handle) {
+    const inputHandle = args[1];
+    if (!['twitch', 'youtube', 'kick', 'facebook'].includes(platform) || !inputHandle) {
       await message.reply('Usage: `!addstream <twitch|youtube|kick|facebook> <handle> [display name]`');
       return;
     }
 
+    let handle = inputHandle;
+    if (platform === 'youtube') {
+      try {
+        handle = await resolveYouTubeInput(inputHandle);
+      } catch (err) {
+        await message.reply(`❌ ${err.message}`);
+        return;
+      }
+    }
+
+    const displayName = args.slice(2).join(' ') || inputHandle;
     addSubStmt.run(guildId, platform, handle, displayName);
-    await message.reply(`✅ Added **${platform}** subscription for **${displayName}** (${handle}).`);
+    const extra = platform === 'youtube' && handle !== inputHandle ? ` → resolved to \`${handle}\`` : '';
+    await message.reply(`✅ Added **${platform}** subscription for **${displayName}** (${inputHandle})${extra}.`);
     return;
   }
 
@@ -177,7 +188,7 @@ client.on('messageCreate', async (message) => {
       '',
       'Platform handle formats:',
       '• twitch: login name (example: `ninja`)',
-      '• youtube: channel id (example: `UC...`)',
+      '• youtube: channel id, @handle, or full youtube url',
       '• kick: username (example: `xqc`)',
       '• facebook: page id (numeric id)'
     ].join('\n'));
@@ -211,6 +222,49 @@ async function getTwitchAppToken() {
   twitchTokenCache.accessToken = data.access_token;
   twitchTokenCache.expiresAt = now + (data.expires_in * 1000);
   return data.access_token;
+}
+
+function extractYouTubeChannelId(raw) {
+  if (!raw) return null;
+  const value = raw.trim();
+  const directId = value.match(/^UC[a-zA-Z0-9_-]{20,}$/);
+  if (directId) return directId[0];
+
+  try {
+    const url = new URL(value);
+    if (!url.hostname.includes('youtube.com')) return null;
+
+    const queryChannelId = url.searchParams.get('channel_id');
+    if (queryChannelId?.startsWith('UC')) return queryChannelId;
+
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts[0] === 'channel' && parts[1]?.startsWith('UC')) return parts[1];
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function resolveYouTubeInput(input) {
+  const directId = extractYouTubeChannelId(input);
+  if (directId) return directId;
+
+  const value = input.trim();
+  let urlString = value;
+  if (!/^https?:\/\//i.test(value)) {
+    const normalized = value.startsWith('@') ? value : `@${value}`;
+    urlString = `https://www.youtube.com/${normalized}`;
+  }
+
+  const pageRes = await fetch(urlString, { redirect: 'follow' });
+  if (!pageRes.ok) throw new Error(`Could not resolve YouTube channel: HTTP ${pageRes.status}`);
+
+  const html = await pageRes.text();
+  const match = html.match(/"channelId":"(UC[a-zA-Z0-9_-]{20,})"/);
+  if (match) return match[1];
+
+  throw new Error('Could not resolve YouTube channel ID. Use channel ID (UC...), @handle, or full URL.');
 }
 
 async function checkTwitch(handle) {

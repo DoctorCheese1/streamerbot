@@ -28,7 +28,7 @@ It auto-registers each server when the bot joins, stores each guild's server ID/
 ## Platform handle formats
 
 - Twitch: username (example `ninja`)
-- YouTube: channel id (example `UCxxxxxxxxxxxxxxxxxxxxxx`)
+- YouTube: channel id, `@handle`, or full channel URL (for example `UC...`, `@StreamerName`, or `https://www.youtube.com/@StreamerName`)
 - Kick: username (example `xqc`)
 - Facebook: numeric page id
 
