@@ -1,0 +1,17 @@
+{
+  "name": "streamerbot",
+  "version": "1.0.0",
+  "description": "Discord multi-server live alert bot for Twitch, YouTube, Kick, and Facebook",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "discord.js": "^14.17.3",
+    "dotenv": "^16.4.7",
+    "rss-parser": "^3.13.0"
+  }
+}
