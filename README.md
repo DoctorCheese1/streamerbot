@@ -20,6 +20,7 @@ It auto-registers each server when the bot joins, stores each guild's server ID/
 
 - `!setchannel #alerts` — set the alert channel for this server
 - `!addstream <twitch|youtube|kick|facebook> <handle> [display name]`
+- `!linkstream <url|handle> [display name]` — auto-detect platform and resolve account from URL
 - `!removestream <platform> <handle>`
 - `!streams` — list subscriptions for this server
 - `!serverid` — show current server ID
@@ -27,10 +28,10 @@ It auto-registers each server when the bot joins, stores each guild's server ID/
 
 ## Platform handle formats
 
-- Twitch: username (example `ninja`)
-- YouTube: channel id, `@handle`, or full channel URL (for example `UC...`, `@StreamerName`, or `https://www.youtube.com/@StreamerName`)
-- Kick: username (example `xqc`)
-- Facebook: numeric page id
+- Twitch: username or full profile URL
+- YouTube: channel id, `@handle`, or full channel URL
+- Kick: username or full profile URL
+- Facebook: numeric page id (preferred) or Facebook URL containing numeric page id
 
 ## Requirements
 

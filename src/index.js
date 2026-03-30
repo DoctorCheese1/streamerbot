@@ -122,20 +122,50 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    let handle = inputHandle;
-    if (platform === 'youtube') {
-      try {
-        handle = await resolveYouTubeInput(inputHandle);
-      } catch (err) {
-        await message.reply(`❌ ${err.message}`);
-        return;
-      }
+    let handle;
+    try {
+      handle = await resolvePlatformInput(platform, inputHandle);
+    } catch (err) {
+      await message.reply(`❌ ${err.message}`);
+      return;
     }
 
     const displayName = args.slice(2).join(' ') || inputHandle;
     addSubStmt.run(guildId, platform, handle, displayName);
-    const extra = platform === 'youtube' && handle !== inputHandle ? ` → resolved to \`${handle}\`` : '';
+    const extra = handle !== inputHandle ? ` → resolved to \`${handle}\`` : '';
     await message.reply(`✅ Added **${platform}** subscription for **${displayName}** (${inputHandle})${extra}.`);
+    return;
+  }
+
+  if (command === '!linkstream') {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      await message.reply('You need Manage Server permission to configure alerts.');
+      return;
+    }
+
+    const input = args[0];
+    if (!input) {
+      await message.reply('Usage: `!linkstream <profile/live url or handle> [display name]`');
+      return;
+    }
+
+    const detectedPlatform = detectPlatformFromInput(input);
+    if (!detectedPlatform) {
+      await message.reply('❌ Could not detect platform from input. Use a Twitch/YouTube/Kick/Facebook URL or use `!addstream`.');
+      return;
+    }
+
+    let handle;
+    try {
+      handle = await resolvePlatformInput(detectedPlatform, input);
+    } catch (err) {
+      await message.reply(`❌ ${err.message}`);
+      return;
+    }
+
+    const displayName = args.slice(1).join(' ') || handle;
+    addSubStmt.run(guildId, detectedPlatform, handle, displayName);
+    await message.reply(`✅ Linked **${detectedPlatform}** account for **${displayName}** (${input}) → \`${handle}\``);
     return;
   }
 
@@ -182,6 +212,7 @@ client.on('messageCreate', async (message) => {
       '**StreamerBot commands**',
       '`!setchannel #channel` - set where alerts should be posted',
       '`!addstream <platform> <handle> [name]` - add monitored streamer/page/channel',
+      '`!linkstream <url|handle> [name]` - auto-detect platform and link from URL',
       '`!removestream <platform> <handle>` - remove monitored source',
       '`!streams` - list configured sources for this server',
       '`!serverid` - show this server id',
@@ -246,6 +277,53 @@ function extractYouTubeChannelId(raw) {
   return null;
 }
 
+function parseTwitchInput(input) {
+  const raw = input.trim().replace(/^@/, '');
+  try {
+    const url = new URL(input);
+    if (!url.hostname.includes('twitch.tv')) return null;
+    const name = url.pathname.split('/').filter(Boolean)[0];
+    return name || null;
+  } catch {
+    return /^[a-zA-Z0-9_]{3,25}$/.test(raw) ? raw : null;
+  }
+}
+
+function parseKickInput(input) {
+  const raw = input.trim().replace(/^@/, '');
+  try {
+    const url = new URL(input);
+    if (!url.hostname.includes('kick.com')) return null;
+    const name = url.pathname.split('/').filter(Boolean)[0];
+    return name || null;
+  } catch {
+    return /^[a-zA-Z0-9_]{2,25}$/.test(raw) ? raw : null;
+  }
+}
+
+function parseFacebookInput(input) {
+  const raw = input.trim();
+  if (/^\d+$/.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    if (!url.hostname.includes('facebook.com')) return null;
+    const parts = url.pathname.split('/').filter(Boolean);
+    const candidate = parts.find((p) => /^\d+$/.test(p));
+    return candidate || null;
+  } catch {
+    return null;
+  }
+}
+
+function detectPlatformFromInput(input) {
+  const value = input.toLowerCase();
+  if (value.includes('youtube.com') || value.startsWith('@') || /^uc[a-z0-9_-]{20,}$/.test(value)) return 'youtube';
+  if (value.includes('twitch.tv')) return 'twitch';
+  if (value.includes('kick.com')) return 'kick';
+  if (value.includes('facebook.com')) return 'facebook';
+  return null;
+}
+
 async function resolveYouTubeInput(input) {
   const directId = extractYouTubeChannelId(input);
   if (directId) return directId;
@@ -265,6 +343,26 @@ async function resolveYouTubeInput(input) {
   if (match) return match[1];
 
   throw new Error('Could not resolve YouTube channel ID. Use channel ID (UC...), @handle, or full URL.');
+}
+
+async function resolvePlatformInput(platform, input) {
+  if (platform === 'youtube') return resolveYouTubeInput(input);
+  if (platform === 'twitch') {
+    const handle = parseTwitchInput(input);
+    if (!handle) throw new Error('Invalid Twitch input. Use username or twitch.tv URL.');
+    return handle.toLowerCase();
+  }
+  if (platform === 'kick') {
+    const handle = parseKickInput(input);
+    if (!handle) throw new Error('Invalid Kick input. Use username or kick.com URL.');
+    return handle.toLowerCase();
+  }
+  if (platform === 'facebook') {
+    const pageId = parseFacebookInput(input);
+    if (!pageId) throw new Error('Invalid Facebook input. Use numeric page ID or facebook.com URL with page id.');
+    return pageId;
+  }
+  return input.trim();
 }
 
 async function checkTwitch(handle) {
