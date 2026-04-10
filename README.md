@@ -56,8 +56,6 @@ It auto-registers each server when the bot joins, stores each guild's server ID/
    npm start
    ```
 
-> `.env` is loaded automatically by the bot (no separate dotenv package/config needed).
-
 ## Environment variables
 
 See `.env.example`:

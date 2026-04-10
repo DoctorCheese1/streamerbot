@@ -1,11 +1,7 @@
+import 'dotenv/config';
 import { Client, GatewayIntentBits, PermissionsBitField } from 'discord.js';
 import Database from 'better-sqlite3';
 import Parser from 'rss-parser';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-loadDotEnvFile();
 
 const parser = new Parser();
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -18,25 +14,6 @@ const FACEBOOK_ACCESS_TOKEN = process.env.FACEBOOK_ACCESS_TOKEN;
 if (!DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN in environment.');
   process.exit(1);
-}
-
-function loadDotEnvFile() {
-  const currentFile = fileURLToPath(import.meta.url);
-  const projectRoot = path.resolve(path.dirname(currentFile), '..');
-  const envFilePath = path.join(projectRoot, '.env');
-  if (!fs.existsSync(envFilePath)) return;
-
-  const envText = fs.readFileSync(envFilePath, 'utf8');
-  for (const line of envText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const splitAt = trimmed.indexOf('=');
-    if (splitAt <= 0) continue;
-
-    const key = trimmed.slice(0, splitAt).trim();
-    const value = trimmed.slice(splitAt + 1).trim().replace(/^['"]|['"]$/g, '');
-    if (!(key in process.env)) process.env[key] = value;
-  }
 }
 
 const db = new Database(DATABASE_FILE);
