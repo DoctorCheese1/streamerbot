@@ -56,14 +56,12 @@ It auto-registers each server when the bot joins, stores each guild's server ID/
    npm start
    ```
 
-> `.env` is loaded automatically by the bot (no separate dotenv package/config needed).
-
 ## Environment variables
 
 See `.env.example`:
 - `DISCORD_TOKEN`
 - `CHECK_INTERVAL_SECONDS` (default: `120`)
-- `DATABASE_FILE` (default: `./data/streamerbot.json`)
+- `DATABASE_FILE` (default: `./data/streamerbot.db`)
 - `TWITCH_CLIENT_ID`
 - `TWITCH_CLIENT_SECRET`
 - `FACEBOOK_ACCESS_TOKEN`

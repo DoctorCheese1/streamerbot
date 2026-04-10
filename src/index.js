@@ -1,15 +1,12 @@
+import 'dotenv/config';
 import { Client, GatewayIntentBits, PermissionsBitField } from 'discord.js';
+import Database from 'better-sqlite3';
 import Parser from 'rss-parser';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-loadDotEnvFile();
 
 const parser = new Parser();
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHECK_INTERVAL_SECONDS = Number(process.env.CHECK_INTERVAL_SECONDS || 120);
-const DATABASE_FILE = process.env.DATABASE_FILE || './data/streamerbot.json';
+const DATABASE_FILE = process.env.DATABASE_FILE || './data/streamerbot.db';
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID;
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET;
 const FACEBOOK_ACCESS_TOKEN = process.env.FACEBOOK_ACCESS_TOKEN;
@@ -19,118 +16,55 @@ if (!DISCORD_TOKEN) {
   process.exit(1);
 }
 
-function loadDotEnvFile() {
-  const currentFile = fileURLToPath(import.meta.url);
-  const projectRoot = path.resolve(path.dirname(currentFile), '..');
-  const envFilePath = path.join(projectRoot, '.env');
-  if (!fs.existsSync(envFilePath)) return;
+const db = new Database(DATABASE_FILE);
+db.pragma('journal_mode = WAL');
 
-  const envText = fs.readFileSync(envFilePath, 'utf8');
-  for (const line of envText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const splitAt = trimmed.indexOf('=');
-    if (splitAt <= 0) continue;
+db.exec(`
+CREATE TABLE IF NOT EXISTS guild_config (
+  guild_id TEXT PRIMARY KEY,
+  alert_channel_id TEXT
+);
 
-    const key = trimmed.slice(0, splitAt).trim();
-    const value = trimmed.slice(splitAt + 1).trim().replace(/^['"]|['"]$/g, '');
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  handle TEXT NOT NULL,
+  display_name TEXT,
+  last_live_id TEXT,
+  last_live_at TEXT,
+  UNIQUE(guild_id, platform, handle)
+);
+`);
 
-const store = loadStore();
+const upsertGuild = db.prepare(`
+INSERT INTO guild_config (guild_id) VALUES (?)
+ON CONFLICT(guild_id) DO NOTHING
+`);
 
-function loadStore() {
-  const fullPath = path.resolve(DATABASE_FILE);
-  if (!fs.existsSync(fullPath)) {
-    return { guildConfig: {}, subscriptions: [], nextId: 1, filePath: fullPath };
-  }
+const setAlertChannel = db.prepare(`
+UPDATE guild_config SET alert_channel_id = ? WHERE guild_id = ?
+`);
 
-  try {
-    const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
-    return {
-      guildConfig: parsed.guildConfig || {},
-      subscriptions: parsed.subscriptions || [],
-      nextId: parsed.nextId || 1,
-      filePath: fullPath
-    };
-  } catch {
-    console.warn('Could not parse data file, creating a fresh store.');
-    return { guildConfig: {}, subscriptions: [], nextId: 1, filePath: fullPath };
-  }
-}
+const addSubStmt = db.prepare(`
+INSERT INTO subscriptions (guild_id, platform, handle, display_name)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(guild_id, platform, handle) DO UPDATE SET display_name = excluded.display_name
+`);
 
-function persistStore() {
-  fs.mkdirSync(path.dirname(store.filePath), { recursive: true });
-  fs.writeFileSync(store.filePath, JSON.stringify({
-    guildConfig: store.guildConfig,
-    subscriptions: store.subscriptions,
-    nextId: store.nextId
-  }, null, 2));
-}
+const removeSubStmt = db.prepare(`
+DELETE FROM subscriptions WHERE guild_id = ? AND platform = ? AND handle = ?
+`);
 
-function upsertGuild(guildId) {
-  if (store.guildConfig[guildId]) return;
-  store.guildConfig[guildId] = { alert_channel_id: null };
-  persistStore();
-}
+const listSubsStmt = db.prepare(`
+SELECT platform, handle, display_name FROM subscriptions WHERE guild_id = ? ORDER BY platform, handle
+`);
 
-function setAlertChannel(guildId, channelId) {
-  upsertGuild(guildId);
-  store.guildConfig[guildId].alert_channel_id = channelId;
-  persistStore();
-}
-
-function addSubscription(guildId, platform, handle, displayName) {
-  upsertGuild(guildId);
-  const existing = store.subscriptions.find((s) => s.guild_id === guildId && s.platform === platform && s.handle === handle);
-  if (existing) {
-    existing.display_name = displayName;
-    persistStore();
-    return;
-  }
-
-  store.subscriptions.push({
-    id: store.nextId++,
-    guild_id: guildId,
-    platform,
-    handle,
-    display_name: displayName,
-    last_live_id: null,
-    last_live_at: null
-  });
-  persistStore();
-}
-
-function removeSubscription(guildId, platform, handle) {
-  const before = store.subscriptions.length;
-  store.subscriptions = store.subscriptions.filter((s) => !(s.guild_id === guildId && s.platform === platform && s.handle === handle));
-  const changes = before - store.subscriptions.length;
-  if (changes) persistStore();
-  return changes;
-}
-
-function listSubscriptions(guildId) {
-  return store.subscriptions
-    .filter((s) => s.guild_id === guildId)
-    .sort((a, b) => `${a.platform}:${a.handle}`.localeCompare(`${b.platform}:${b.handle}`));
-}
-
-function getGuildConfig(guildId) {
-  return store.guildConfig[guildId] || null;
-}
-
-function getAllSubscriptions() {
-  return store.subscriptions;
-}
-
-function updateSubscriptionLiveState(id, liveId, liveAt) {
-  const subscription = store.subscriptions.find((s) => s.id === id);
-  if (!subscription) return;
-  subscription.last_live_id = liveId;
-  subscription.last_live_at = liveAt;
-  persistStore();
-}
+const getGuildConfigStmt = db.prepare(`SELECT alert_channel_id FROM guild_config WHERE guild_id = ?`);
+const getAllSubsStmt = db.prepare(`SELECT * FROM subscriptions`);
+const updateSubLiveStateStmt = db.prepare(`
+UPDATE subscriptions SET last_live_id = ?, last_live_at = ? WHERE id = ?
+`);
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
@@ -140,13 +74,13 @@ client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log(`Connected to ${client.guilds.cache.size} guild(s).`);
   for (const guild of client.guilds.cache.values()) {
-    upsertGuild(guild.id);
+    upsertGuild.run(guild.id);
   }
   scheduleChecks();
 });
 
 client.on('guildCreate', (guild) => {
-  upsertGuild(guild.id);
+  upsertGuild.run(guild.id);
   console.log(`Joined new guild: ${guild.name} (${guild.id}) - auto-registered config.`);
 });
 
@@ -156,7 +90,7 @@ client.on('messageCreate', async (message) => {
 
   const [command, ...args] = message.content.trim().split(/\s+/);
   const guildId = message.guild.id;
-  upsertGuild(guildId);
+  upsertGuild.run(guildId);
 
   if (command === '!setchannel') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -170,7 +104,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    setAlertChannel(guildId, channel.id);
+    setAlertChannel.run(channel.id, guildId);
     await message.reply(`✅ Alert channel set to ${channel}.`);
     return;
   }
@@ -197,7 +131,7 @@ client.on('messageCreate', async (message) => {
     }
 
     const displayName = args.slice(2).join(' ') || inputHandle;
-    addSubscription(guildId, platform, handle, displayName);
+    addSubStmt.run(guildId, platform, handle, displayName);
     const extra = handle !== inputHandle ? ` → resolved to \`${handle}\`` : '';
     await message.reply(`✅ Added **${platform}** subscription for **${displayName}** (${inputHandle})${extra}.`);
     return;
@@ -230,7 +164,7 @@ client.on('messageCreate', async (message) => {
     }
 
     const displayName = args.slice(1).join(' ') || handle;
-    addSubscription(guildId, detectedPlatform, handle, displayName);
+    addSubStmt.run(guildId, detectedPlatform, handle, displayName);
     await message.reply(`✅ Linked **${detectedPlatform}** account for **${displayName}** (${input}) → \`${handle}\``);
     return;
   }
@@ -247,8 +181,8 @@ client.on('messageCreate', async (message) => {
       await message.reply('Usage: `!removestream <platform> <handle>`');
       return;
     }
-    const changes = removeSubscription(guildId, platform, handle);
-    if (changes) {
+    const result = removeSubStmt.run(guildId, platform, handle);
+    if (result.changes) {
       await message.reply(`✅ Removed **${platform}** subscription for **${handle}**.`);
     } else {
       await message.reply('No matching subscription found.');
@@ -257,7 +191,7 @@ client.on('messageCreate', async (message) => {
   }
 
   if (command === '!streams') {
-    const subs = listSubscriptions(guildId);
+    const subs = listSubsStmt.all(guildId);
     if (!subs.length) {
       await message.reply('No stream subscriptions configured for this server yet.');
       return;
@@ -526,14 +460,14 @@ async function checkStream(platform, handle) {
 }
 
 async function runChecks() {
-  const subscriptions = getAllSubscriptions();
+  const subscriptions = getAllSubsStmt.all();
   for (const sub of subscriptions) {
     try {
       const live = await checkStream(sub.platform, sub.handle);
       if (!live) continue;
       if (sub.last_live_id === live.liveId) continue;
 
-      const guildConfig = getGuildConfig(sub.guild_id);
+      const guildConfig = getGuildConfigStmt.get(sub.guild_id);
       if (!guildConfig?.alert_channel_id) continue;
 
       const guild = await client.guilds.fetch(sub.guild_id).catch(() => null);
@@ -543,7 +477,7 @@ async function runChecks() {
 
       const mention = sub.display_name || sub.handle;
       await channel.send(`🔴 **${mention}** is LIVE on **${sub.platform.toUpperCase()}**!\n${live.title}\n${live.url}`);
-      updateSubscriptionLiveState(sub.id, live.liveId, live.startedAt);
+      updateSubLiveStateStmt.run(live.liveId, live.startedAt, sub.id);
       console.log(`Alert sent for ${sub.platform}:${sub.handle} in guild ${sub.guild_id}`);
     } catch (err) {
       console.error(`Check failed for ${sub.platform}:${sub.handle} (guild ${sub.guild_id})`, err.message);
